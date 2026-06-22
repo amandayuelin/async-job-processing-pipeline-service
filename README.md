@@ -4,9 +4,13 @@ Production-candidate FastAPI service for asynchronous job submission, execution,
 
 ## Architecture
 
-High-level DigitalOcean deployment and job lifecycle:
+High-level DigitalOcean deployment:
 
-![Async job processing architecture](docs/architecture-overview.png)
+![High-level architecture](docs/high-level-architecture.png)
+
+Full job lifecycle, including retry and dead-letter flow:
+
+![Job lifecycle flow](docs/job-lifecycle-flow.png)
 
 - FastAPI API accepts jobs and returns a job ID immediately.
 - PostgreSQL stores authoritative job state, attempts, idempotency keys, results, drain mode, and dead-letter state.
@@ -64,6 +68,13 @@ Optional live integration test:
 ```bash
 RUN_INTEGRATION=1 pytest tests/test_integration.py
 ```
+
+Test coverage to show in review:
+
+- `tests/test_api.py`: health/readiness, create/get/list jobs, idempotency, validation errors, unsupported handlers, queue depth, drain mode, cancellation, and metrics.
+- `tests/test_service.py`: worker success, duplicate Kafka message skip, transient retry, dead-letter after retry exhaustion, timeout handling, recurring job creation, drain behavior, due-job republish, and Kafka publish failure.
+- `tests/test_integration.py`: opt-in live PostgreSQL/Kafka scaffold for end-to-end validation.
+- `.github/workflows/ci.yml`: runs `pytest` on every push and pull request.
 
 ## API
 
@@ -138,13 +149,22 @@ Visibility and drain:
 
 ## Observability
 
+Runtime endpoints:
+
+- `GET /healthz`: process liveness.
+- `GET /readyz`: PostgreSQL and Kafka readiness.
+- `GET /queue/depth`: queued, due, running, dead-lettered, and queued-by-priority counts.
+- `GET /metrics`: structured job metrics computed from PostgreSQL state.
+
 `GET /metrics` returns:
 
-- job success/failure counts and rates
-- retry count
-- dead-letter count
-- job latency p50/p95 in seconds
-- worker utilization derived from running vs pending jobs
+- `job_success_count` and `job_failure_count`.
+- `job_success_rate` and `job_failure_rate`.
+- `retry_count` and `dead_letter_count`.
+- `job_latency_p50_seconds` and `job_latency_p95_seconds`.
+- `worker_utilization` derived from running vs pending jobs.
+
+Review note: metrics are computed from the authoritative job table on demand. For production, export these to Prometheus/OpenTelemetry/Grafana or Datadog for historical dashboards, alerting, and time-windowed rates.
 
 ## Configuration
 
@@ -226,6 +246,32 @@ The demo script walks through health/readiness, job submission, idempotency, suc
 ```bash
 RUN_RECURRING_DEMO=1 ./scripts/demo.sh https://<app-url>
 ```
+
+## Review Trade-offs and Improvements
+
+What is production-minded now:
+
+- Clear module boundaries: API, schemas, service logic, repository/state transitions, Kafka adapter, worker, infra, and tests.
+- PostgreSQL is the source of truth for correctness and lifecycle visibility.
+- Kafka decouples HTTP submission from worker execution and supports independent worker scaling.
+- Workers use at-least-once semantics and re-check PostgreSQL state before execution.
+- Errors use consistent JSON responses with request IDs.
+- Deployment is repeatable through Terraform, cloud-init, App Spec, and scripts.
+
+Important trade-offs to say out loud:
+
+- Database commit plus Kafka publish is not atomic yet; production should add a transactional outbox and relay.
+- Kafka priority is best-effort through high/default/low topics, not strict global priority ordering.
+- Metrics are structured JSON from PostgreSQL, not a time-series backend yet.
+- PostgreSQL and Kafka are self-managed on a Droplet for MVP speed; production should use managed/private-networked data services.
+- Cron support intentionally handles a small five-field subset; production should use a mature scheduler/parser.
+
+Next improvements:
+
+- Add Alembic migrations instead of startup table creation.
+- Add Prometheus/OpenTelemetry export, dashboards, and alerts.
+- Add full PostgreSQL/Kafka integration services in CI.
+- Add auth, rate limiting, remote Terraform state, backups, and retention cleanup.
 
 ## Handling High Load
 
