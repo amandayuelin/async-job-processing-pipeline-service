@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import time
 from typing import Any
 
 from app.errors import BadRequestError
@@ -24,10 +25,16 @@ def fail_once_handler(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def sleep_handler(payload: dict[str, Any]) -> dict[str, Any]:
+    time.sleep(float(payload.get("seconds", 1)))
+    return payload
+
+
 HANDLERS: dict[str, JobHandler] = {
     "echo": echo_handler,
     "always_fail": always_fail_handler,
     "fail_once": fail_once_handler,
+    "sleep": sleep_handler,
 }
 
 

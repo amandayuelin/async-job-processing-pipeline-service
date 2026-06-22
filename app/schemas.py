@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.enums import JobStatus
+from app.scheduling import validate_cron_expression
 
 
 class JobCreate(BaseModel):
@@ -14,12 +15,18 @@ class JobCreate(BaseModel):
     max_retries: int = Field(default=3, ge=0, le=10)
     timeout_seconds: int = Field(default=30, ge=1, le=300)
     run_at: datetime | None = None
+    recurring_cron: str | None = Field(default=None, min_length=9, max_length=100)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("handler")
     @classmethod
     def normalize_handler(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("recurring_cron")
+    @classmethod
+    def validate_recurring_cron(cls, value: str | None) -> str | None:
+        return validate_cron_expression(value) if value else None
 
 
 class JobCreateResponse(BaseModel):
@@ -39,6 +46,7 @@ class JobResponse(BaseModel):
     max_retries: int
     timeout_seconds: int
     run_at: datetime | None
+    recurring_cron: str | None
     next_run_at: datetime
     last_error: str | None
     result: dict[str, Any] | None
@@ -95,6 +103,9 @@ class MetricsResponse(BaseModel):
     job_failure_rate: float
     retry_count: int
     dead_letter_count: int
+    job_latency_p50_seconds: float
+    job_latency_p95_seconds: float
+    worker_utilization: float
 
 
 class ErrorBody(BaseModel):

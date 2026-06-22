@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import concurrent.futures
 import json
+import multiprocessing
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -59,7 +59,9 @@ class JobService:
         handler = get_handler(job.handler)
         try:
             result = self._run_with_timeout(handler, job.payload, job.timeout_seconds)
-            return self.repository.mark_succeeded(job.id, result)
+            succeeded = self.repository.mark_succeeded(job.id, result)
+            self.repository.create_next_recurring_job(succeeded)
+            return succeeded
         except Exception as exc:
             error = str(exc) or exc.__class__.__name__
             backoff = self._backoff_seconds(job.attempt_count)
@@ -85,12 +87,21 @@ class JobService:
 
     @staticmethod
     def _run_with_timeout(handler: Any, payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(handler, payload)
-            try:
-                return future.result(timeout=timeout_seconds)
-            except concurrent.futures.TimeoutError as exc:
-                raise TransientJobError("job attempt timed out") from exc
+        context = multiprocessing.get_context("fork")
+        queue = context.Queue()
+        process = context.Process(target=_handler_process, args=(handler, payload, queue))
+        process.start()
+        process.join(timeout_seconds)
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            raise TransientJobError("job attempt timed out")
+        if queue.empty():
+            raise TransientJobError("job attempt failed without a result")
+        status, value = queue.get()
+        if status == "ok":
+            return value
+        raise TransientJobError(value)
 
 
 def success_failure_rates(metrics: JobMetrics) -> tuple[float, float]:
@@ -108,3 +119,10 @@ def parse_job_id(value: str) -> UUID:
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _handler_process(handler: Any, payload: dict[str, Any], queue: Any) -> None:
+    try:
+        queue.put(("ok", handler(payload)))
+    except Exception as exc:
+        queue.put(("error", str(exc) or exc.__class__.__name__))

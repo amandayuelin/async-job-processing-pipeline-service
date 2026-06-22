@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.enums import AttemptStatus, JobStatus
 from app.errors import ConflictError, NotFoundError
 from app.models import Job, JobAttempt, OpsSetting
+from app.scheduling import next_cron_run
 from app.schemas import JobCreate
 
 
@@ -40,6 +41,7 @@ class JobRecord:
     attempt_count: int
     next_run_at: datetime
     run_at: datetime | None
+    recurring_cron: str | None
     locked_by: str | None
     locked_at: datetime | None
     kafka_message_key: str | None
@@ -66,6 +68,9 @@ class JobMetrics:
     job_failure_count: int
     retry_count: int
     dead_letter_count: int
+    job_latency_p50_seconds: float
+    job_latency_p95_seconds: float
+    worker_utilization: float
 
 
 class JobRepository(Protocol):
@@ -93,6 +98,9 @@ class JobRepository(Protocol):
     def mark_succeeded(self, job_id: UUID, result: dict[str, Any]) -> JobRecord:
         ...
 
+    def create_next_recurring_job(self, job: JobRecord) -> JobRecord | None:
+        ...
+
     def mark_failed_attempt(self, job_id: UUID, error: str, backoff_seconds: int) -> JobRecord:
         ...
 
@@ -118,6 +126,7 @@ def _record_from_model(job: Job) -> JobRecord:
         attempt_count=job.attempt_count,
         next_run_at=ensure_aware(job.next_run_at) or utc_now(),
         run_at=ensure_aware(job.run_at),
+        recurring_cron=job.recurring_cron,
         locked_by=job.locked_by,
         locked_at=ensure_aware(job.locked_at),
         kafka_message_key=job.kafka_message_key,
@@ -155,6 +164,7 @@ class SqlAlchemyJobRepository:
             attempt_count=0,
             next_run_at=next_run_at,
             run_at=run_at,
+            recurring_cron=request.recurring_cron,
             kafka_message_key=str(job_id),
             idempotency_key=request.idempotency_key,
             created_at=now,
@@ -190,7 +200,7 @@ class SqlAlchemyJobRepository:
     def due_jobs(self, limit: int) -> list[JobRecord]:
         query = (
             select(Job)
-            .where(Job.status == JobStatus.QUEUED.value, Job.next_run_at <= utc_now())
+            .where(Job.status.in_([JobStatus.QUEUED.value, JobStatus.FAILED.value]), Job.next_run_at <= utc_now())
             .order_by(Job.priority.desc(), Job.created_at.asc())
             .limit(limit)
         )
@@ -198,16 +208,17 @@ class SqlAlchemyJobRepository:
 
     def queue_depth(self) -> QueueDepth:
         now = utc_now()
-        queued = self.db.scalar(select(func.count()).select_from(Job).where(Job.status == JobStatus.QUEUED.value)) or 0
+        pending_statuses = [JobStatus.QUEUED.value, JobStatus.FAILED.value]
+        queued = self.db.scalar(select(func.count()).select_from(Job).where(Job.status.in_(pending_statuses))) or 0
         due = self.db.scalar(
-            select(func.count()).select_from(Job).where(Job.status == JobStatus.QUEUED.value, Job.next_run_at <= now)
+            select(func.count()).select_from(Job).where(Job.status.in_(pending_statuses), Job.next_run_at <= now)
         ) or 0
         running = self.db.scalar(select(func.count()).select_from(Job).where(Job.status == JobStatus.RUNNING.value)) or 0
         dead = self.db.scalar(
             select(func.count()).select_from(Job).where(Job.status == JobStatus.DEAD_LETTERED.value)
         ) or 0
         rows = self.db.execute(
-            select(Job.priority, func.count()).where(Job.status == JobStatus.QUEUED.value).group_by(Job.priority)
+            select(Job.priority, func.count()).where(Job.status.in_(pending_statuses)).group_by(Job.priority)
         ).all()
         return QueueDepth(queued, due, running, dead, [{"priority": row[0], "queued": row[1]} for row in rows])
 
@@ -218,14 +229,24 @@ class SqlAlchemyJobRepository:
             select(func.count()).select_from(Job).where(Job.status == JobStatus.DEAD_LETTERED.value)
         ) or 0
         retries = self.db.scalar(select(func.coalesce(func.sum(Job.attempt_count - 1), 0)).select_from(Job)) or 0
-        return JobMetrics(success, failed, max(int(retries), 0), dead)
+        terminal_jobs = [
+            _record_from_model(job)
+            for job in self.db.scalars(
+                select(Job).where(Job.processed_at.is_not(None), Job.created_at.is_not(None))
+            )
+        ]
+        running = self.db.scalar(select(func.count()).select_from(Job).where(Job.status == JobStatus.RUNNING.value)) or 0
+        queued = self.db.scalar(select(func.count()).select_from(Job).where(Job.status == JobStatus.QUEUED.value)) or 0
+        p50, p95 = _latency_percentiles(terminal_jobs)
+        utilization = _worker_utilization(int(running), int(queued))
+        return JobMetrics(success, failed, max(int(retries), 0), dead, p50, p95, utilization)
 
     def claim_job(self, job_id: UUID, worker_id: str) -> JobRecord | None:
         if self.get_drain():
             return None
         job = self.db.get(Job, str(job_id))
         now = utc_now()
-        if not job or job.status != JobStatus.QUEUED.value or ensure_aware(job.next_run_at) > now:
+        if not job or job.status not in {JobStatus.QUEUED.value, JobStatus.FAILED.value} or ensure_aware(job.next_run_at) > now:
             return None
         job.status = JobStatus.RUNNING.value
         job.locked_by = worker_id
@@ -245,6 +266,33 @@ class SqlAlchemyJobRepository:
         self.db.refresh(job)
         return _record_from_model(job)
 
+    def create_next_recurring_job(self, job: JobRecord) -> JobRecord | None:
+        if not job.recurring_cron:
+            return None
+        next_run_at = next_cron_run(job.recurring_cron, utc_now())
+        now = utc_now()
+        next_job_id = uuid4()
+        next_job = Job(
+            id=str(next_job_id),
+            handler=job.handler,
+            payload=job.payload,
+            status=JobStatus.QUEUED.value,
+            priority=job.priority,
+            max_retries=job.max_retries,
+            timeout_seconds=job.timeout_seconds,
+            attempt_count=0,
+            next_run_at=next_run_at,
+            run_at=next_run_at,
+            recurring_cron=job.recurring_cron,
+            kafka_message_key=str(next_job_id),
+            created_at=now,
+            updated_at=now,
+        )
+        self.db.add(next_job)
+        self.db.commit()
+        self.db.refresh(next_job)
+        return _record_from_model(next_job)
+
     def mark_succeeded(self, job_id: UUID, result: dict[str, Any]) -> JobRecord:
         job = self._get_model(job_id)
         now = utc_now()
@@ -263,7 +311,7 @@ class SqlAlchemyJobRepository:
         job = self._get_model(job_id)
         now = utc_now()
         exhausted = job.attempt_count > job.max_retries
-        job.status = JobStatus.DEAD_LETTERED.value if exhausted else JobStatus.QUEUED.value
+        job.status = JobStatus.DEAD_LETTERED.value if exhausted else JobStatus.FAILED.value
         job.last_error = error
         job.locked_by = None
         job.locked_at = None
@@ -278,8 +326,8 @@ class SqlAlchemyJobRepository:
 
     def cancel_job(self, job_id: UUID) -> JobRecord:
         job = self._get_model(job_id)
-        if job.status != JobStatus.QUEUED.value:
-            raise ConflictError("Only queued jobs can be cancelled", {"status": job.status})
+        if job.status not in {JobStatus.QUEUED.value, JobStatus.FAILED.value}:
+            raise ConflictError("Only pending jobs can be cancelled", {"status": job.status})
         now = utc_now()
         job.status = JobStatus.CANCELLED.value
         job.updated_at = now
@@ -343,6 +391,7 @@ class InMemoryJobRepository:
                 attempt_count=0,
                 next_run_at=next_run_at,
                 run_at=run_at,
+                recurring_cron=request.recurring_cron,
                 locked_by=None,
                 locked_at=None,
                 kafka_message_key=str(job_id),
@@ -377,14 +426,14 @@ class InMemoryJobRepository:
         jobs = [
             job
             for job in self.jobs.values()
-            if job.status == JobStatus.QUEUED and job.next_run_at <= now
+            if job.status in {JobStatus.QUEUED, JobStatus.FAILED} and job.next_run_at <= now
         ]
         jobs = sorted(jobs, key=lambda job: (-job.priority, job.created_at))
         return jobs[:limit]
 
     def queue_depth(self) -> QueueDepth:
         now = utc_now()
-        queued_jobs = [job for job in self.jobs.values() if job.status == JobStatus.QUEUED]
+        queued_jobs = [job for job in self.jobs.values() if job.status in {JobStatus.QUEUED, JobStatus.FAILED}]
         priorities: dict[int, int] = {}
         for job in queued_jobs:
             priorities[job.priority] = priorities.get(job.priority, 0) + 1
@@ -401,7 +450,12 @@ class InMemoryJobRepository:
         failed = sum(1 for job in self.jobs.values() if job.status == JobStatus.FAILED)
         dead = sum(1 for job in self.jobs.values() if job.status == JobStatus.DEAD_LETTERED)
         retries = sum(max(job.attempt_count - 1, 0) for job in self.jobs.values())
-        return JobMetrics(success, failed, retries, dead)
+        p50, p95 = _latency_percentiles(list(self.jobs.values()))
+        utilization = _worker_utilization(
+            sum(1 for job in self.jobs.values() if job.status == JobStatus.RUNNING),
+            sum(1 for job in self.jobs.values() if job.status == JobStatus.QUEUED),
+        )
+        return JobMetrics(success, failed, retries, dead, p50, p95, utilization)
 
     def claim_job(self, job_id: UUID, worker_id: str) -> JobRecord | None:
         with self.lock:
@@ -409,7 +463,7 @@ class InMemoryJobRepository:
                 return None
             job = self.jobs.get(job_id)
             now = utc_now()
-            if not job or job.status != JobStatus.QUEUED or job.next_run_at > now:
+            if not job or job.status not in {JobStatus.QUEUED, JobStatus.FAILED} or job.next_run_at > now:
                 return None
             updated = job.__dict__ | {
                 "status": JobStatus.RUNNING,
@@ -420,6 +474,37 @@ class InMemoryJobRepository:
             }
             self.jobs[job_id] = JobRecord(**updated)
             return self.jobs[job_id]
+
+    def create_next_recurring_job(self, job: JobRecord) -> JobRecord | None:
+        if not job.recurring_cron:
+            return None
+        now = utc_now()
+        next_run_at = next_cron_run(job.recurring_cron, now)
+        next_job_id = uuid4()
+        next_job = JobRecord(
+            id=next_job_id,
+            handler=job.handler,
+            payload=job.payload,
+            status=JobStatus.QUEUED,
+            priority=job.priority,
+            max_retries=job.max_retries,
+            timeout_seconds=job.timeout_seconds,
+            attempt_count=0,
+            next_run_at=next_run_at,
+            run_at=next_run_at,
+            recurring_cron=job.recurring_cron,
+            locked_by=None,
+            locked_at=None,
+            kafka_message_key=str(next_job_id),
+            last_error=None,
+            result=None,
+            idempotency_key=None,
+            created_at=now,
+            updated_at=now,
+            processed_at=None,
+        )
+        self.jobs[next_job_id] = next_job
+        return next_job
 
     def mark_succeeded(self, job_id: UUID, result: dict[str, Any]) -> JobRecord:
         with self.lock:
@@ -442,7 +527,7 @@ class InMemoryJobRepository:
             now = utc_now()
             exhausted = job.attempt_count > job.max_retries
             updated = job.__dict__ | {
-                "status": JobStatus.DEAD_LETTERED if exhausted else JobStatus.QUEUED,
+                "status": JobStatus.DEAD_LETTERED if exhausted else JobStatus.FAILED,
                 "last_error": error,
                 "locked_by": None,
                 "locked_at": None,
@@ -456,8 +541,8 @@ class InMemoryJobRepository:
     def cancel_job(self, job_id: UUID) -> JobRecord:
         with self.lock:
             job = self.get_job(job_id)
-            if job.status != JobStatus.QUEUED:
-                raise ConflictError("Only queued jobs can be cancelled", {"status": job.status.value})
+            if job.status not in {JobStatus.QUEUED, JobStatus.FAILED}:
+                raise ConflictError("Only pending jobs can be cancelled", {"status": job.status.value})
             now = utc_now()
             updated = job.__dict__ | {"status": JobStatus.CANCELLED, "updated_at": now, "processed_at": now}
             self.jobs[job_id] = JobRecord(**updated)
@@ -468,3 +553,26 @@ class InMemoryJobRepository:
 
     def get_drain(self) -> bool:
         return self.drain_enabled
+
+
+def _latency_percentiles(jobs: list[JobRecord]) -> tuple[float, float]:
+    latencies = sorted(
+        (job.processed_at - job.created_at).total_seconds()
+        for job in jobs
+        if job.processed_at is not None
+    )
+    if not latencies:
+        return 0.0, 0.0
+    return _percentile(latencies, 0.50), _percentile(latencies, 0.95)
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    index = max(min(round((len(values) - 1) * percentile), len(values) - 1), 0)
+    return values[index]
+
+
+def _worker_utilization(running: int, queued: int) -> float:
+    total_active = running + queued
+    if total_active == 0:
+        return 0.0
+    return running / total_active

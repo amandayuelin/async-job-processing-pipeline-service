@@ -23,7 +23,14 @@ def test_readyz(client: TestClient) -> None:
 def test_create_and_get_job(client: TestClient, producer: FakeJobProducer) -> None:
     response = client.post(
         "/jobs",
-        json={"handler": "echo", "payload": {"message": "hello"}, "priority": 5, "max_retries": 3, "timeout_seconds": 30},
+        json={
+            "handler": "echo",
+            "payload": {"message": "hello"},
+            "priority": 5,
+            "max_retries": 3,
+            "timeout_seconds": 30,
+            "recurring_cron": "*/5 * * * *",
+        },
     )
 
     assert response.status_code == 201
@@ -36,6 +43,7 @@ def test_create_and_get_job(client: TestClient, producer: FakeJobProducer) -> No
     assert get_response.status_code == 200
     assert get_response.json()["payload"] if "payload" in get_response.json() else True
     assert get_response.json()["handler"] == "echo"
+    assert get_response.json()["recurring_cron"] == "*/5 * * * *"
 
 
 def test_idempotent_replay_does_not_republish(client: TestClient, producer: FakeJobProducer) -> None:
@@ -96,3 +104,6 @@ def test_metrics_endpoint(client: TestClient, service) -> None:
     assert response.status_code == 200
     assert response.json()["job_success_count"] == 1
     assert response.json()["job_success_rate"] == 1.0
+    assert response.json()["job_latency_p50_seconds"] >= 0
+    assert response.json()["job_latency_p95_seconds"] >= 0
+    assert "worker_utilization" in response.json()

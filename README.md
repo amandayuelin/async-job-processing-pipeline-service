@@ -8,6 +8,7 @@ Production-candidate FastAPI service for asynchronous job submission, execution,
 - PostgreSQL stores authoritative job state, attempts, idempotency keys, results, drain mode, and dead-letter state.
 - Kafka transports submitted/retry/dead-letter job events between API and workers.
 - Worker processes consume Kafka messages, verify PostgreSQL state, execute handlers, and update results.
+- Failed attempts remain visible as `failed` while waiting for retry; exhausted jobs move to `dead_lettered`.
 - DigitalOcean App Platform runs the API and worker components. PostgreSQL and Kafka can be self-maintained for the timed MVP.
 
 ## Local Setup
@@ -35,6 +36,12 @@ pytest
 
 Unit and API tests use an in-memory repository and fake Kafka producer so the fast test suite does not require live PostgreSQL or Kafka. Integration testing can use `docker compose`.
 
+Optional live integration test:
+
+```bash
+RUN_INTEGRATION=1 pytest tests/test_integration.py
+```
+
 ## API
 
 - `GET /healthz`
@@ -56,11 +63,32 @@ curl -X POST http://localhost:8000/jobs \
   -d '{"handler":"echo","payload":{"message":"hello"},"priority":5,"max_retries":3,"timeout_seconds":30}'
 ```
 
+Delayed and recurring job submission:
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"handler":"echo","payload":{"message":"hello"},"run_at":"2026-06-22T18:00:00Z","recurring_cron":"*/5 * * * *"}'
+```
+
+The MVP cron parser supports five-field cron expressions with `*`, `*/n`, or exact numeric values.
+
 Supported MVP handlers:
 
 - `echo`: returns the submitted payload.
 - `always_fail`: raises a transient error for retry/dead-letter testing.
 - `fail_once`: test helper handler.
+- `sleep`: test helper handler for timeout behavior.
+
+## Observability
+
+`GET /metrics` returns:
+
+- job success/failure counts and rates
+- retry count
+- dead-letter count
+- job latency p50/p95 in seconds
+- worker utilization derived from running vs pending jobs
 
 ## Configuration
 

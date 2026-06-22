@@ -140,6 +140,9 @@ def create_app() -> FastAPI:
             job_failure_rate=failure_rate,
             retry_count=metric_values.retry_count,
             dead_letter_count=metric_values.dead_letter_count,
+            job_latency_p50_seconds=metric_values.job_latency_p50_seconds,
+            job_latency_p95_seconds=metric_values.job_latency_p95_seconds,
+            worker_utilization=metric_values.worker_utilization,
         )
 
     @app.post("/jobs/{job_id}/cancel", response_model=CancelResponse)

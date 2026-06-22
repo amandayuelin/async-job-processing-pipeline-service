@@ -35,6 +35,7 @@ class Job(Base):
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recurring_cron: Mapped[str | None] = mapped_column(String(100), nullable=True)
     locked_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     kafka_message_key: Mapped[str | None] = mapped_column(String(100), nullable=True)

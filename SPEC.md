@@ -19,8 +19,8 @@ Functional requirements:
 - Document at-least-once semantics and duplicate execution boundaries.
 - Include an architecture flow diagram.
 - Support tests, CI/CD, Docker, and DigitalOcean deployment.
-- Support future delayed execution and cron-style recurring jobs.
-- Support future observability for queue depth, worker utilization, latency percentiles, and dead-letter rate.
+- Support delayed execution and MVP cron-style recurring jobs.
+- Support observability for queue depth, worker utilization, latency percentiles, success/failure counts, and dead-letter rate.
 
 Non-functional requirements:
 
@@ -108,7 +108,7 @@ If unanswered, the MVP assumptions below apply.
 ## 6. Non-Goals
 
 - Arbitrary untrusted code execution.
-- Full cron scheduler implementation.
+- Advanced cron scheduler features beyond simple five-field recurring jobs.
 - Complex distributed retry and DLQ infrastructure beyond the required Kafka topics and PostgreSQL state.
 - Redis or cache.
 - OAuth/RBAC.
@@ -426,6 +426,7 @@ Fields:
 - `attempt_count`: integer, required, default `0`.
 - `next_run_at`: timestamptz, required, default now.
 - `run_at`: timestamptz, nullable, used for delayed execution.
+- `recurring_cron`: text, nullable, simple five-field cron expression for recurring jobs.
 - `locked_by`: text, nullable.
 - `locked_at`: timestamptz, nullable.
 - `kafka_message_key`: text, nullable, usually the job ID.
@@ -519,7 +520,7 @@ Execution:
 - Execute the registered handler with the job payload.
 - Enforce `timeout_seconds` per attempt.
 - On success, set `status = succeeded`, store `result`, clear lock fields, and set `processed_at`.
-- On transient failure before retry limit, set `status = queued`, compute exponential backoff in `next_run_at`, store `last_error`, clear lock fields, and publish a retry message.
+- On transient failure before retry limit, set `status = failed`, compute exponential backoff in `next_run_at`, store `last_error`, clear lock fields, and republish when due.
 - On timeout, treat as a failed attempt and retry if attempts remain.
 - When attempts are exhausted, set `status = dead_lettered`, store `last_error`, clear lock fields, set `processed_at`, and optionally publish a dead-letter event to Kafka.
 
@@ -640,6 +641,7 @@ Job submission:
 - `max_retries` is required or defaults to `3`, bounded from `0` to `10`.
 - `timeout_seconds` is required or defaults to `30`, bounded from `1` to `300`.
 - `run_at` is optional valid timestamp. Past values are allowed and treated as immediately due.
+- `recurring_cron` is optional and supports five fields using `*`, `*/n`, or exact numeric values.
 - `idempotency_key` is optional string, bounded length, and should be stable per logical submission.
 
 Pagination:

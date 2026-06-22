@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import signal
-import time
 from uuid import UUID
 
 from kafka import KafkaConsumer
@@ -53,10 +52,10 @@ class Worker:
             while self.running:
                 records = consumer.poll(timeout_ms=int(self.settings.worker_poll_interval_seconds * 1000))
                 self._publish_due_jobs()
-                for _partition, messages in records.items():
-                    for message in messages:
-                        self._process_message(message.value)
-                        consumer.commit()
+                messages = [message for partition_messages in records.values() for message in partition_messages]
+                for message in sorted(messages, key=lambda item: self._topic_rank(item.topic)):
+                    self._process_message(message.value)
+                    consumer.commit()
         finally:
             consumer.close()
             logger.info("worker_stopped", extra={"worker_id": self.settings.worker_id})
@@ -77,6 +76,15 @@ class Worker:
             count = service.publish_due_jobs(self.settings.worker_batch_size)
             if count:
                 logger.info("due_jobs_published", extra={"count": count})
+
+    def _topic_rank(self, topic: str) -> int:
+        ranks = {
+            self.settings.kafka_submitted_high_topic: 0,
+            self.settings.kafka_submitted_default_topic: 1,
+            self.settings.kafka_retry_topic: 2,
+            self.settings.kafka_submitted_low_topic: 3,
+        }
+        return ranks.get(topic, 99)
 
 
 def main() -> None:

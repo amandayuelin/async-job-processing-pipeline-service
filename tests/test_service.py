@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID
 
 import pytest
@@ -9,8 +10,23 @@ from app.schemas import JobCreate
 from app.service import JobService
 
 
-def create_job(service: JobService, handler: str = "echo", max_retries: int = 3) -> UUID:
-    job, replay = service.submit_job(JobCreate(handler=handler, payload={"message": "hello"}, max_retries=max_retries))
+def create_job(
+    service: JobService,
+    handler: str = "echo",
+    max_retries: int = 3,
+    payload: dict | None = None,
+    timeout_seconds: int = 30,
+    recurring_cron: str | None = None,
+) -> UUID:
+    job, replay = service.submit_job(
+        JobCreate(
+            handler=handler,
+            payload=payload or {"message": "hello"},
+            max_retries=max_retries,
+            timeout_seconds=timeout_seconds,
+            recurring_cron=recurring_cron,
+        )
+    )
     assert replay is False
     return job.id
 
@@ -41,7 +57,7 @@ def test_worker_retries_transient_failure(service: JobService, producer: FakeJob
     result = service.process_job(job_id, "worker-test")
 
     assert result is not None
-    assert result.status == JobStatus.QUEUED
+    assert result.status == JobStatus.FAILED
     assert result.attempt_count == 1
     assert result.last_error == "hello"
     assert len(producer.published) == 1
@@ -56,6 +72,29 @@ def test_worker_dead_letters_after_retries(service: JobService, producer: FakeJo
     assert result.status == JobStatus.DEAD_LETTERED
     assert result.attempt_count == 1
     assert producer.dead_letters[0]["job_id"] == str(job_id)
+
+
+def test_worker_times_out_and_retries(service: JobService) -> None:
+    job_id = create_job(service, handler="sleep", payload={"seconds": 2}, timeout_seconds=1)
+
+    result = service.process_job(job_id, "worker-test")
+
+    assert result is not None
+    assert result.status == JobStatus.FAILED
+    assert result.last_error == "job attempt timed out"
+
+
+def test_successful_recurring_job_creates_next_run(service: JobService) -> None:
+    job_id = create_job(service, recurring_cron="*/5 * * * *")
+
+    result = service.process_job(job_id, "worker-test")
+    jobs = service.list_jobs(None, None, 10, 0)
+
+    assert result is not None
+    assert result.status == JobStatus.SUCCEEDED
+    recurring_jobs = [job for job in jobs if job.recurring_cron == "*/5 * * * *"]
+    assert len(recurring_jobs) == 2
+    assert any(job.status == JobStatus.QUEUED and job.run_at > datetime.now(timezone.utc) for job in recurring_jobs)
 
 
 def test_drain_prevents_claim(service: JobService) -> None:
