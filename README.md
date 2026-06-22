@@ -4,13 +4,9 @@ Production-candidate FastAPI service for asynchronous job submission, execution,
 
 ## Architecture
 
-High-level DigitalOcean deployment:
+High-level DigitalOcean deployment and job lifecycle:
 
-![High-level architecture](docs/high-level-architecture.png)
-
-Full job lifecycle, including retry and dead-letter flow:
-
-![Job lifecycle flow](docs/job-lifecycle-flow.png)
+![Async job processing architecture](docs/architecture-overview.png)
 
 - FastAPI API accepts jobs and returns a job ID immediately.
 - PostgreSQL stores authoritative job state, attempts, idempotency keys, results, drain mode, and dead-letter state.
@@ -19,7 +15,7 @@ Full job lifecycle, including retry and dead-letter flow:
 - Failed attempts remain visible as `failed` while waiting for retry; exhausted jobs move to `dead_lettered`.
 - DigitalOcean App Platform runs the API and worker components. PostgreSQL and Kafka can be self-maintained for the timed MVP.
 
-For a code-review walkthrough with the major design choices and trade-offs, see [`CODE_REVIEW.md`](CODE_REVIEW.md).
+This README is the primary review guide; [`CODE_REVIEW.md`](CODE_REVIEW.md) keeps extra backup notes on trade-offs and tests.
 
 ## Code Layout
 
@@ -36,6 +32,8 @@ app/
 
 ## Local Setup
 
+Start PostgreSQL and Kafka locally, then run the API and worker as separate processes:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -50,6 +48,8 @@ Run a worker in a second shell:
 ```bash
 python -m app.worker
 ```
+
+The API should be reachable at `http://localhost:8000`. Use `GET /healthz` for liveness and `GET /readyz` to confirm the API can reach PostgreSQL and Kafka.
 
 ## Tests
 
@@ -103,6 +103,39 @@ Supported MVP handlers:
 - `fail_once`: test helper handler.
 - `sleep`: test helper handler for timeout behavior.
 
+## Functional Expectations Walkthrough
+
+Use this section during review to show each required behavior quickly.
+
+Job submission:
+
+- Show `POST /jobs` in `app/main.py` and `JobCreate` in `app/jobs/schemas.py`.
+- Show `JobService.submit_job()` in `app/jobs/service.py`: validates handler/payload size, creates the PostgreSQL job row, publishes a Kafka job event, and returns the job ID.
+- Demo: `scripts/demo.sh` section `Submit an echo job and prove idempotency`.
+- Key point: processing is decoupled because the API returns after durable insert and Kafka publish, not after handler execution.
+
+Worker execution:
+
+- Show `app/worker.py`: worker consumes Kafka topics, sorts by priority topic, processes messages, and commits offsets after processing.
+- Show `JobService.process_job()` in `app/jobs/service.py`: claims the job, runs the handler with timeout, stores success, schedules retry, or dead-letters.
+- Show `claim_job()` and `mark_failed_attempt()` in `app/jobs/repositories.py`: PostgreSQL guards state transitions and retry exhaustion.
+- Demo: `scripts/demo.sh` sections `Force a timeout` and `Force a handler failure`.
+- Key point: workers are at-least-once; duplicate Kafka messages are bounded by PostgreSQL claim/state checks.
+
+Status and result API:
+
+- Show `GET /jobs/{job_id}` in `app/main.py` and `JobResponse` in `app/jobs/schemas.py`.
+- Response includes current state, attempt count, max retries, timeout, `last_error`, `result`, `next_run_at`, and timestamps.
+- Demo: `scripts/demo.sh` section `Poll until the echo job succeeds`.
+- Key point: PostgreSQL is the source of truth for lifecycle visibility.
+
+Visibility and drain:
+
+- Show `GET /queue/depth`, `GET /metrics`, `POST /ops/drain`, and `POST /jobs/{job_id}/cancel` in `app/main.py`.
+- Show queue depth, metrics, drain, and cancellation logic in `app/jobs/repositories.py`.
+- Demo: `scripts/demo.sh` sections `Submit a delayed job and cancel it`, `Toggle drain mode`, and `Final queue depth, recent jobs, and metrics`.
+- Key point: operators can inspect backlog, pause new claims, cancel pending work, and monitor success/failure behavior.
+
 ## Observability
 
 `GET /metrics` returns:
@@ -117,16 +150,30 @@ Supported MVP handlers:
 
 Important runtime variables:
 
-- `DATABASE_URL`
-- `KAFKA_BOOTSTRAP_SERVERS`
-- `KAFKA_SUBMITTED_HIGH_TOPIC`
-- `KAFKA_SUBMITTED_DEFAULT_TOPIC`
-- `KAFKA_SUBMITTED_LOW_TOPIC`
-- `KAFKA_RETRY_TOPIC`
-- `KAFKA_DEAD_LETTER_TOPIC`
-- `MAX_PAYLOAD_BYTES`
-- `MAX_PAGE_SIZE`
-- `WORKER_ID`
+- `DATABASE_URL`: SQLAlchemy PostgreSQL connection string.
+- `KAFKA_BOOTSTRAP_SERVERS`: Kafka broker list, for example `localhost:9092`.
+- `KAFKA_SUBMITTED_HIGH_TOPIC`: high-priority submitted job topic.
+- `KAFKA_SUBMITTED_DEFAULT_TOPIC`: default-priority submitted job topic.
+- `KAFKA_SUBMITTED_LOW_TOPIC`: low-priority submitted job topic.
+- `KAFKA_RETRY_TOPIC`: retry topic used when due jobs are republished.
+- `KAFKA_DEAD_LETTER_TOPIC`: dead-letter topic for exhausted jobs.
+- `MAX_PAYLOAD_BYTES`: maximum serialized job payload size.
+- `MAX_PAGE_SIZE`: maximum API pagination limit.
+- `WORKER_ID`: worker identity stored on claimed jobs.
+
+Worker-specific variables:
+
+- `WORKER_ID`, default `worker-local`: identifies which worker claimed a job.
+- `WORKER_BATCH_SIZE`, default `10`: maximum number of due queued/failed jobs the worker republishes per scheduler pass.
+- `WORKER_POLL_INTERVAL_SECONDS`, default `1`: Kafka poll interval and due-job scheduler cadence.
+- `STALE_LOCK_SECONDS`, default `300`: intended threshold for stale running locks in production hardening.
+
+Worker scaling:
+
+- Run more worker processes locally with additional `python -m app.worker` shells.
+- In DigitalOcean App Platform, increase `WORKER_INSTANCE_COUNT` before running `scripts/deploy.sh`.
+- API and worker components are separate, so increasing workers does not require scaling API replicas.
+- Kafka partition count controls how much parallelism workers can use for submitted/retry topics.
 
 Deployment-only variables:
 
@@ -180,11 +227,33 @@ The demo script walks through health/readiness, job submission, idempotency, suc
 RUN_RECURRING_DEMO=1 ./scripts/demo.sh https://<app-url>
 ```
 
-## High Load Notes
+## Handling High Load
 
-- Scale API replicas and worker replicas independently on App Platform.
-- Increase Kafka partitions for more worker parallelism.
-- Keep PostgreSQL indexes on job status, retry timing, and created time.
-- Keep handlers idempotent because Kafka and worker processing are at-least-once.
-- Add transactional outbox before depending on strict DB-to-Kafka publish recovery.
-- Add managed PostgreSQL/Kafka, metrics, tracing, rate limiting, and retention cleanup for production hardening.
+The service is designed so HTTP traffic and background execution can scale separately.
+
+API tier:
+
+- Increase `API_INSTANCE_COUNT` in the deployment environment to add more FastAPI replicas.
+- Keep the API stateless; all durable state lives in PostgreSQL and all work delivery goes through Kafka.
+- Keep request payloads bounded with `MAX_PAYLOAD_BYTES` and pagination bounded with `MAX_PAGE_SIZE`.
+- Add authentication and rate limiting before exposing the service to untrusted clients.
+
+Worker tier:
+
+- Increase `WORKER_INSTANCE_COUNT` to process more jobs concurrently.
+- Increase Kafka partitions for the submitted/retry topics when adding many workers; workers cannot use more parallelism than partitions allow.
+- Tune `WORKER_BATCH_SIZE` and `WORKER_POLL_INTERVAL_SECONDS` to balance retry latency against database/Kafka load.
+- Keep handlers idempotent because Kafka delivery and worker processing are at-least-once.
+
+Database and queue:
+
+- PostgreSQL is the source of truth for job lifecycle state; keep indexes on status, `next_run_at`, priority, and creation time.
+- Kafka is the delivery bus; monitor consumer lag and topic partition count as load grows.
+- Use managed PostgreSQL/Kafka or a private-networked data plane for production.
+- Add a transactional outbox before depending on strict recovery between database commit and Kafka publish.
+
+Observability and operations:
+
+- Use `/queue/depth` and `/metrics` to watch backlog, success/failure rate, dead letters, latency p50/p95, and worker utilization.
+- Use `/ops/drain` before maintenance to stop workers from claiming new jobs.
+- Add Prometheus/OpenTelemetry, tracing, alerting, and retention cleanup for production hardening.

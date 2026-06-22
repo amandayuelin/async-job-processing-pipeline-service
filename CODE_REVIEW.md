@@ -71,6 +71,30 @@ Integration and CI coverage:
 - `scripts/smoke.sh` validates a deployed environment quickly after deploy.
 - `scripts/demo.sh` exercises the deployed feature set end-to-end for review.
 
+## CI/CD and Automation
+
+CI is implemented with GitHub Actions:
+
+- `.github/workflows/ci.yml` runs on every push and pull request.
+- The workflow checks out the repository, installs Python 3.12, installs `requirements.txt`, and runs `pytest`.
+- The fast suite uses in-memory repositories and a fake Kafka producer, so CI does not need live PostgreSQL or Kafka to verify the core API and state-machine behavior.
+
+Deployment automation is implemented with scripts and IaC:
+
+- `scripts/deploy.sh` is the one-shot DigitalOcean deployment path.
+- Terraform in `infra/terraform/` provisions the self-managed infrastructure Droplet, firewall, generated PostgreSQL password, Kafka cluster ID, and cloud-init bootstrap.
+- `infra/terraform/cloud-init.yaml.tftpl` starts PostgreSQL and Kafka containers and creates the required Kafka topics.
+- `infra/app.yaml` defines the DigitalOcean App Platform API service and worker component.
+- The deploy script renders the App Spec with Terraform outputs and creates or updates the App Platform app.
+- `scripts/smoke.sh` and `scripts/demo.sh` validate the live deployment after release.
+
+What I would harden next:
+
+- Add a GitHub Actions deployment workflow gated by environments and secrets instead of running deploy from a local shell.
+- Add integration-test services for PostgreSQL and Kafka in CI.
+- Store Terraform state in a remote backend.
+- Add deploy approvals, rollback notes, and release tagging.
+
 ## Why These Choices
 
 PostgreSQL as source of truth:
