@@ -4,8 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.enums import JobStatus
-from app.scheduling import validate_cron_expression
+from app.core.enums import JobStatus
+from app.jobs.scheduling import validate_cron_expression
 
 
 class JobCreate(BaseModel):

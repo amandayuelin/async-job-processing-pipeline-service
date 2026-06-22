@@ -4,11 +4,11 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from app.config import Settings, get_settings
-from app.database import get_db
-from app.kafka import JobProducer, KafkaJobProducer
-from app.repositories import SqlAlchemyJobRepository
-from app.service import JobService
+from app.core.config import Settings, get_settings
+from app.db.session import get_db
+from app.jobs.repositories import SqlAlchemyJobRepository
+from app.jobs.service import JobService
+from app.queue.kafka import JobProducer, KafkaJobProducer
 
 
 @lru_cache

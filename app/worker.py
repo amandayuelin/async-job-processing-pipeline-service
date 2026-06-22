@@ -7,11 +7,11 @@ from uuid import UUID
 
 from kafka import KafkaConsumer
 
-from app.config import get_settings
-from app.database import SessionLocal, create_tables
-from app.kafka import KafkaJobProducer
-from app.repositories import SqlAlchemyJobRepository
-from app.service import JobService
+from app.core.config import get_settings
+from app.db.session import SessionLocal, create_tables
+from app.jobs.repositories import SqlAlchemyJobRepository
+from app.jobs.service import JobService
+from app.queue.kafka import KafkaJobProducer
 
 logger = logging.getLogger(__name__)
 

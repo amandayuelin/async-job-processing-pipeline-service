@@ -3,11 +3,11 @@ from uuid import UUID
 
 import pytest
 
-from app.enums import JobStatus
-from app.errors import DependencyUnavailableError
-from app.kafka import FakeJobProducer
-from app.schemas import JobCreate
-from app.service import JobService
+from app.core.enums import JobStatus
+from app.core.errors import DependencyUnavailableError
+from app.jobs.schemas import JobCreate
+from app.jobs.service import JobService
+from app.queue.kafka import FakeJobProducer
 
 
 def create_job(

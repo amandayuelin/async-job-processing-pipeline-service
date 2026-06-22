@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.errors import BadRequestError
+from app.core.errors import BadRequestError
 
 
 def validate_cron_expression(expression: str) -> str:

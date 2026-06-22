@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi.testclient import TestClient
 
-from app.kafka import FakeJobProducer
+from app.queue.kafka import FakeJobProducer
 
 
 def test_healthz(client: TestClient) -> None:

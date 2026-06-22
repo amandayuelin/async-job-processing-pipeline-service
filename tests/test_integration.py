@@ -5,12 +5,12 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.config import Settings
-from app.kafka import KafkaJobProducer
-from app.models import Base
-from app.repositories import SqlAlchemyJobRepository
-from app.schemas import JobCreate
-from app.service import JobService
+from app.core.config import Settings
+from app.db.models import Base
+from app.jobs.repositories import SqlAlchemyJobRepository
+from app.jobs.schemas import JobCreate
+from app.jobs.service import JobService
+from app.queue.kafka import KafkaJobProducer
 
 
 pytestmark = pytest.mark.integration

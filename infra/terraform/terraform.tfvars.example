@@ -1,0 +1,9 @@
+digitalocean_access_token = "do-not-commit-real-token"
+app_name                  = "async-job-pipeline"
+region                    = "nyc"
+github_repo               = "amandayuelin/async-job-processing-pipeline-service"
+github_branch             = "main"
+database_url              = "postgresql+psycopg://USER:PASSWORD@HOST:5432/DBNAME"
+kafka_bootstrap_servers   = "HOST:9092"
+api_instance_count        = 1
+worker_instance_count     = 1

@@ -2,12 +2,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.config import Settings
-from app.dependencies import get_job_service
-from app.kafka import FakeJobProducer
+from app.api.dependencies import get_job_service
+from app.core.config import Settings
 from app.main import create_app
-from app.repositories import InMemoryJobRepository
-from app.service import JobService
+from app.jobs.repositories import InMemoryJobRepository
+from app.jobs.service import JobService
+from app.queue.kafka import FakeJobProducer
 
 
 @pytest.fixture

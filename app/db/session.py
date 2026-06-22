@@ -4,8 +4,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import Settings, get_settings
-from app.models import Base
+from app.core.config import Settings, get_settings
+from app.db.models import Base
 
 
 def make_engine(settings: Settings | None = None) -> Engine:

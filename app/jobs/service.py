@@ -6,13 +6,13 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from app.config import Settings, get_settings
-from app.enums import JobStatus
-from app.errors import BadRequestError
-from app.handlers import TransientJobError, ensure_supported_handler, get_handler
-from app.kafka import JobProducer
-from app.repositories import JobMetrics, JobRecord, JobRepository, QueueDepth
-from app.schemas import JobCreate
+from app.core.config import Settings, get_settings
+from app.core.enums import JobStatus
+from app.core.errors import BadRequestError
+from app.jobs.handlers import TransientJobError, ensure_supported_handler, get_handler
+from app.jobs.repositories import JobMetrics, JobRecord, JobRepository, QueueDepth
+from app.jobs.schemas import JobCreate
+from app.queue.kafka import JobProducer
 
 
 class JobService:

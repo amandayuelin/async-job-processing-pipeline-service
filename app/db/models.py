@@ -4,7 +4,7 @@ from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, Uniqu
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from app.enums import AttemptStatus, JobStatus
+from app.core.enums import AttemptStatus, JobStatus
 
 
 def utc_now() -> datetime:

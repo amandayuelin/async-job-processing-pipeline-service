@@ -8,9 +8,10 @@ services:
       branch: __GITHUB_BRANCH__
       deploy_on_push: true
     dockerfile_path: Dockerfile
+    run_command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     http_port: 8000
-    instance_count: 1
-    instance_size_slug: basic-xxs
+    instance_count: __API_INSTANCE_COUNT__
+    instance_size_slug: __API_INSTANCE_SIZE__
     routes:
       - path: /
     health_check:
@@ -26,6 +27,22 @@ services:
         type: SECRET
       - key: LOG_LEVEL
         value: INFO
+      - key: PORT
+        value: "8000"
+      - key: MAX_PAGE_SIZE
+        value: "__MAX_PAGE_SIZE__"
+      - key: MAX_PAYLOAD_BYTES
+        value: "__MAX_PAYLOAD_BYTES__"
+      - key: KAFKA_SUBMITTED_HIGH_TOPIC
+        value: "__KAFKA_SUBMITTED_HIGH_TOPIC__"
+      - key: KAFKA_SUBMITTED_DEFAULT_TOPIC
+        value: "__KAFKA_SUBMITTED_DEFAULT_TOPIC__"
+      - key: KAFKA_SUBMITTED_LOW_TOPIC
+        value: "__KAFKA_SUBMITTED_LOW_TOPIC__"
+      - key: KAFKA_RETRY_TOPIC
+        value: "__KAFKA_RETRY_TOPIC__"
+      - key: KAFKA_DEAD_LETTER_TOPIC
+        value: "__KAFKA_DEAD_LETTER_TOPIC__"
 
 workers:
   - name: worker
@@ -35,8 +52,8 @@ workers:
       deploy_on_push: true
     dockerfile_path: Dockerfile
     run_command: python -m app.worker
-    instance_count: 1
-    instance_size_slug: basic-xxs
+    instance_count: __WORKER_INSTANCE_COUNT__
+    instance_size_slug: __WORKER_INSTANCE_SIZE__
     envs:
       - key: ENVIRONMENT
         value: production
@@ -50,3 +67,23 @@ workers:
         value: worker-do
       - key: LOG_LEVEL
         value: INFO
+      - key: MAX_PAGE_SIZE
+        value: "__MAX_PAGE_SIZE__"
+      - key: MAX_PAYLOAD_BYTES
+        value: "__MAX_PAYLOAD_BYTES__"
+      - key: WORKER_POLL_INTERVAL_SECONDS
+        value: "__WORKER_POLL_INTERVAL_SECONDS__"
+      - key: WORKER_BATCH_SIZE
+        value: "__WORKER_BATCH_SIZE__"
+      - key: STALE_LOCK_SECONDS
+        value: "__STALE_LOCK_SECONDS__"
+      - key: KAFKA_SUBMITTED_HIGH_TOPIC
+        value: "__KAFKA_SUBMITTED_HIGH_TOPIC__"
+      - key: KAFKA_SUBMITTED_DEFAULT_TOPIC
+        value: "__KAFKA_SUBMITTED_DEFAULT_TOPIC__"
+      - key: KAFKA_SUBMITTED_LOW_TOPIC
+        value: "__KAFKA_SUBMITTED_LOW_TOPIC__"
+      - key: KAFKA_RETRY_TOPIC
+        value: "__KAFKA_RETRY_TOPIC__"
+      - key: KAFKA_DEAD_LETTER_TOPIC
+        value: "__KAFKA_DEAD_LETTER_TOPIC__"

@@ -8,3 +8,7 @@ htmlcov/
 .deploy/
 dist/
 build/
+.terraform/
+*.tfstate
+*.tfstate.*
+infra/terraform/terraform.tfvars

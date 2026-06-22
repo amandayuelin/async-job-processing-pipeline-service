@@ -9,12 +9,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import Settings, get_settings
-from app.database import check_database_ready, create_tables
-from app.dependencies import get_job_producer, get_job_service
-from app.enums import JobStatus
-from app.errors import DependencyUnavailableError, ServiceError
-from app.schemas import (
+from app.api.dependencies import get_job_producer, get_job_service
+from app.core.config import Settings, get_settings
+from app.core.enums import JobStatus
+from app.core.errors import DependencyUnavailableError, ServiceError
+from app.db.session import check_database_ready, create_tables
+from app.jobs.schemas import (
     CancelResponse,
     DrainRequest,
     DrainResponse,
@@ -27,7 +27,7 @@ from app.schemas import (
     QueueDepthPriority,
     QueueDepthResponse,
 )
-from app.service import JobService, success_failure_rates
+from app.jobs.service import JobService, success_failure_rates
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):

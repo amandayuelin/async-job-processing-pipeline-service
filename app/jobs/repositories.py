@@ -10,11 +10,11 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.enums import AttemptStatus, JobStatus
-from app.errors import ConflictError, NotFoundError
-from app.models import Job, JobAttempt, OpsSetting
-from app.scheduling import next_cron_run
-from app.schemas import JobCreate
+from app.core.enums import AttemptStatus, JobStatus
+from app.core.errors import ConflictError, NotFoundError
+from app.db.models import Job, JobAttempt, OpsSetting
+from app.jobs.scheduling import next_cron_run
+from app.jobs.schemas import JobCreate
 
 
 def utc_now() -> datetime:

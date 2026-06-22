@@ -2,7 +2,7 @@ from collections.abc import Callable
 import time
 from typing import Any
 
-from app.errors import BadRequestError
+from app.core.errors import BadRequestError
 
 JobHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
