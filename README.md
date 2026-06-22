@@ -4,7 +4,47 @@ Production-candidate FastAPI service for asynchronous job submission, execution,
 
 ## Architecture
 
-![Async job processing architecture](docs/architecture.svg)
+```mermaid
+flowchart LR
+    client[Client / Caller]
+
+    subgraph app[DigitalOcean App Platform]
+        api[FastAPI API]
+        worker[Worker Pool]
+        ops[Ops Endpoints]
+    end
+
+    subgraph data[Self-managed Data Droplet]
+        db[(PostgreSQL<br/>Source of Truth)]
+        kafka[(Kafka<br/>Delivery Bus)]
+        dlq[(Dead-letter Topic)]
+    end
+
+    client -->|POST /jobs| api
+    api -->|validate request| api
+    api -->|insert durable job row| db
+    api -->|publish job event| kafka
+    api -->|return job_id immediately| client
+
+    kafka -->|consume job message| worker
+    worker -->|claim job / lock row| db
+    worker -->|run pluggable handler| worker
+    worker -->|store result + succeeded| db
+
+    worker -->|transient failure| db
+    db -->|next_run_at reached| worker
+    worker -->|republish due retry| kafka
+
+    worker -->|retries exhausted| db
+    worker -->|publish DLQ event| dlq
+
+    client -->|GET /jobs/id| api
+    api -->|read job status/result| db
+    api -->|return lifecycle state| client
+
+    client -->|GET /queue/depth<br/>GET /metrics<br/>POST /ops/drain| ops
+    ops -->|read/update operational state| db
+```
 
 - FastAPI API accepts jobs and returns a job ID immediately.
 - PostgreSQL stores authoritative job state, attempts, idempotency keys, results, drain mode, and dead-letter state.
@@ -160,6 +200,18 @@ Smoke test after deploy:
 
 ```bash
 ./scripts/smoke.sh https://<app-url>
+```
+
+Full feature demo after deploy:
+
+```bash
+./scripts/demo.sh https://<app-url>
+```
+
+The demo script walks through health/readiness, job submission, idempotency, successful processing, delayed cancellation, timeout/dead-letter behavior, handler failure/dead-letter behavior, drain mode, queue depth, recent jobs, and metrics. Recurring jobs are opt-in to avoid leaving scheduled demo work running:
+
+```bash
+RUN_RECURRING_DEMO=1 ./scripts/demo.sh https://<app-url>
 ```
 
 ## High Load Notes
