@@ -78,7 +78,10 @@ def create_app() -> FastAPI:
     @app.get("/readyz")
     def readyz() -> dict[str, str]:
         database_ok = check_database_ready()
-        kafka_ok = get_job_producer().ready()
+        try:
+            kafka_ok = get_job_producer().ready()
+        except Exception:
+            kafka_ok = False
         if not database_ok or not kafka_ok:
             raise DependencyUnavailableError("Dependency unavailable", {"database": database_ok, "kafka": kafka_ok})
         return {"status": "ready", "database": "ok", "kafka": "ok"}

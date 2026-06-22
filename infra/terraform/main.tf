@@ -1,124 +1,79 @@
-locals {
-  kafka_topics = {
-    KAFKA_SUBMITTED_HIGH_TOPIC    = "jobs.submitted.high"
-    KAFKA_SUBMITTED_DEFAULT_TOPIC = "jobs.submitted.default"
-    KAFKA_SUBMITTED_LOW_TOPIC     = "jobs.submitted.low"
-    KAFKA_RETRY_TOPIC             = "jobs.retry"
-    KAFKA_DEAD_LETTER_TOPIC       = "jobs.dead_lettered"
-  }
-
-  common_envs = merge(
-    {
-      ENVIRONMENT               = "production"
-      LOG_LEVEL                 = "INFO"
-      MAX_PAGE_SIZE             = var.max_page_size
-      MAX_PAYLOAD_BYTES         = var.max_payload_bytes
-      KAFKA_BOOTSTRAP_SERVERS   = var.kafka_bootstrap_servers
-    },
-    local.kafka_topics
-  )
+resource "random_password" "postgres" {
+  length  = 24
+  special = false
 }
 
-resource "digitalocean_app" "service" {
-  spec {
-    name   = var.app_name
-    region = var.region
+resource "random_id" "kafka_cluster" {
+  byte_length = 16
+}
 
-    service {
-      name               = "api"
-      dockerfile_path    = "Dockerfile"
-      run_command        = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
-      http_port          = 8000
-      instance_count     = var.api_instance_count
-      instance_size_slug = var.api_instance_size
+resource "digitalocean_vpc" "main" {
+  name     = "${var.app_name}-vpc"
+  region   = var.region
+  ip_range = var.vpc_ip_range
+}
 
-      github {
-        repo           = var.github_repo
-        branch         = var.github_branch
-        deploy_on_push = true
-      }
+resource "digitalocean_droplet" "infra" {
+  name     = "${var.app_name}-infra"
+  region   = var.region
+  size     = var.infra_droplet_size
+  image    = var.infra_droplet_image
+  vpc_uuid = digitalocean_vpc.main.id
+  tags     = ["${var.app_name}", "self-managed-infra"]
+  user_data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
+    postgres_database             = var.postgres_database
+    postgres_user                 = var.postgres_user
+    postgres_password             = random_password.postgres.result
+    kafka_cluster_id              = random_id.kafka_cluster.b64_url
+    kafka_submitted_high_topic    = var.kafka_submitted_high_topic
+    kafka_submitted_default_topic = var.kafka_submitted_default_topic
+    kafka_submitted_low_topic     = var.kafka_submitted_low_topic
+    kafka_retry_topic             = var.kafka_retry_topic
+    kafka_dead_letter_topic       = var.kafka_dead_letter_topic
+    kafka_partition_count         = var.kafka_partition_count
+    max_kafka_heap_mb             = var.max_kafka_heap_mb
+  })
+}
 
-      routes {
-        path = "/"
-      }
+resource "digitalocean_firewall" "infra" {
+  name        = "${var.app_name}-infra"
+  droplet_ids = [digitalocean_droplet.infra.id]
 
-      health_check {
-        http_path = "/healthz"
-      }
+  inbound_rule {
+    protocol         = "tcp"
+    port_range       = "5432"
+    source_addresses = ["0.0.0.0/0", "::/0"]
+  }
 
-      env {
-        key   = "DATABASE_URL"
-        value = var.database_url
-        type  = "SECRET"
-      }
+  inbound_rule {
+    protocol         = "tcp"
+    port_range       = "9092"
+    source_addresses = ["0.0.0.0/0", "::/0"]
+  }
 
-      dynamic "env" {
-        for_each = local.common_envs
-        content {
-          key   = env.key
-          value = env.value
-          type  = env.key == "KAFKA_BOOTSTRAP_SERVERS" ? "SECRET" : "GENERAL"
-        }
-      }
-
-      env {
-        key   = "PORT"
-        value = "8000"
-        type  = "GENERAL"
-      }
+  dynamic "inbound_rule" {
+    for_each = var.ssh_allowed_cidrs
+    content {
+      protocol         = "tcp"
+      port_range       = "22"
+      source_addresses = [inbound_rule.value]
     }
+  }
 
-    worker {
-      name               = "worker"
-      dockerfile_path    = "Dockerfile"
-      run_command        = "python -m app.worker"
-      instance_count     = var.worker_instance_count
-      instance_size_slug = var.worker_instance_size
+  outbound_rule {
+    protocol              = "tcp"
+    port_range            = "all"
+    destination_addresses = ["0.0.0.0/0", "::/0"]
+  }
 
-      github {
-        repo           = var.github_repo
-        branch         = var.github_branch
-        deploy_on_push = true
-      }
+  outbound_rule {
+    protocol              = "udp"
+    port_range            = "all"
+    destination_addresses = ["0.0.0.0/0", "::/0"]
+  }
 
-      env {
-        key   = "DATABASE_URL"
-        value = var.database_url
-        type  = "SECRET"
-      }
-
-      dynamic "env" {
-        for_each = local.common_envs
-        content {
-          key   = env.key
-          value = env.value
-          type  = env.key == "KAFKA_BOOTSTRAP_SERVERS" ? "SECRET" : "GENERAL"
-        }
-      }
-
-      env {
-        key   = "WORKER_ID"
-        value = "worker-do"
-        type  = "GENERAL"
-      }
-
-      env {
-        key   = "WORKER_BATCH_SIZE"
-        value = var.worker_batch_size
-        type  = "GENERAL"
-      }
-
-      env {
-        key   = "WORKER_POLL_INTERVAL_SECONDS"
-        value = var.worker_poll_interval_seconds
-        type  = "GENERAL"
-      }
-
-      env {
-        key   = "STALE_LOCK_SECONDS"
-        value = var.stale_lock_seconds
-        type  = "GENERAL"
-      }
-    }
+  outbound_rule {
+    protocol              = "icmp"
+    destination_addresses = ["0.0.0.0/0", "::/0"]
   }
 }

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     kafka_dead_letter_topic: str = "jobs.dead_lettered"
     kafka_username: str | None = None
     kafka_password: str | None = None
+    kafka_security_protocol: str = "PLAINTEXT"
+    kafka_sasl_mechanism: str = "PLAIN"
 
     max_page_size: int = 100
     max_payload_bytes: int = 64 * 1024

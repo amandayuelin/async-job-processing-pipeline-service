@@ -25,6 +25,8 @@ services:
       - key: KAFKA_BOOTSTRAP_SERVERS
         value: __KAFKA_BOOTSTRAP_SERVERS__
         type: SECRET
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: PLAINTEXT
       - key: LOG_LEVEL
         value: INFO
       - key: PORT
@@ -63,6 +65,8 @@ workers:
       - key: KAFKA_BOOTSTRAP_SERVERS
         value: __KAFKA_BOOTSTRAP_SERVERS__
         type: SECRET
+      - key: KAFKA_SECURITY_PROTOCOL
+        value: PLAINTEXT
       - key: WORKER_ID
         value: worker-do
       - key: LOG_LEVEL

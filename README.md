@@ -4,12 +4,16 @@ Production-candidate FastAPI service for asynchronous job submission, execution,
 
 ## Architecture
 
+![Async job processing architecture](docs/architecture.svg)
+
 - FastAPI API accepts jobs and returns a job ID immediately.
 - PostgreSQL stores authoritative job state, attempts, idempotency keys, results, drain mode, and dead-letter state.
 - Kafka transports submitted/retry/dead-letter job events between API and workers.
 - Worker processes consume Kafka messages, verify PostgreSQL state, execute handlers, and update results.
 - Failed attempts remain visible as `failed` while waiting for retry; exhausted jobs move to `dead_lettered`.
 - DigitalOcean App Platform runs the API and worker components. PostgreSQL and Kafka can be self-maintained for the timed MVP.
+
+For a code-review walkthrough with the major design choices and trade-offs, see [`CODE_REVIEW.md`](CODE_REVIEW.md).
 
 ## Code Layout
 
@@ -121,41 +125,36 @@ Important runtime variables:
 Deployment-only variables:
 
 - `DIGITALOCEAN_ACCESS_TOKEN`
-- `DO_APP_NAME`
-- `DO_APP_ID`
-- `DO_REGION`
-- `GITHUB_REPO`
-- `GITHUB_BRANCH`
+- `DO_APP_NAME`, optional, defaults to `async-job-pipeline`
+- `DO_APP_REGION`, optional, defaults to `nyc`
+- `DO_INFRA_REGION`, optional, defaults to `nyc1`
 
 Never commit real tokens or credentials.
 
 ## Deployment
 
-The repo includes a DigitalOcean App Platform spec template at `infra/app.yaml`, Terraform configuration under `infra/terraform/`, and a one-shot deployment script at `scripts/deploy.sh`.
+The repo includes Terraform configuration under `infra/terraform/`, a DigitalOcean App Platform spec template at `infra/app.yaml`, and a one-shot deployment script at `scripts/deploy.sh`.
+
+Terraform provisions a self-managed infrastructure Droplet that runs PostgreSQL and Kafka with Docker. The App Platform spec defines the application deployment shape: API component, worker component, Dockerfile build strategy, run commands, health check, route, instance sizes/counts, and runtime environment variables.
 
 ```bash
 export DIGITALOCEAN_ACCESS_TOKEN=...
-export DO_APP_NAME=async-job-pipeline
-export DO_APP_ID=... # optional; use this to update an existing manually-created app
-export DATABASE_URL=...
-export KAFKA_BOOTSTRAP_SERVERS=...
-export GITHUB_REPO=owner/repo
 ./scripts/deploy.sh
 ```
 
-The App Platform spec defines the API component, worker component, Dockerfile build strategy, run commands, health check, public route, instance sizes/counts, and runtime environment variables.
+The script infers the GitHub repo and branch from the local git checkout, provisions the self-managed PostgreSQL/Kafka Droplet with Terraform, renders `infra/app.yaml` with the generated connection details, and creates or updates the App Platform app.
 
 Terraform alternative:
 
 ```bash
 cd infra/terraform
 cp terraform.tfvars.example terraform.tfvars
-# edit terraform.tfvars with real values; do not commit it
+# edit terraform.tfvars only if you want to run Terraform directly; do not commit it
 terraform init
 terraform apply
 ```
 
-Pause before running deployment until the DigitalOcean token and endpoint values are available.
+Pause before running deployment until the DigitalOcean token is available.
 
 Smoke test after deploy:
 

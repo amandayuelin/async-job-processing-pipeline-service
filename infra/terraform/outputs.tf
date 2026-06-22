@@ -1,11 +1,20 @@
-output "app_id" {
-  value = digitalocean_app.service.id
+output "vpc_id" {
+  value = digitalocean_vpc.main.id
 }
 
-output "app_live_url" {
-  value = digitalocean_app.service.live_url
+output "database_url" {
+  value     = "postgresql+psycopg://${var.postgres_user}:${random_password.postgres.result}@${digitalocean_droplet.infra.ipv4_address}:5432/${var.postgres_database}"
+  sensitive = true
 }
 
-output "app_default_ingress" {
-  value = digitalocean_app.service.default_ingress
+output "kafka_bootstrap_servers" {
+  value = "${digitalocean_droplet.infra.ipv4_address}:9092"
+}
+
+output "infra_public_ip" {
+  value = digitalocean_droplet.infra.ipv4_address
+}
+
+output "infra_private_ip" {
+  value = digitalocean_droplet.infra.ipv4_address_private
 }

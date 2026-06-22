@@ -44,8 +44,8 @@ class KafkaJobProducer:
         if self.settings.kafka_username and self.settings.kafka_password:
             kwargs.update(
                 {
-                    "security_protocol": "SASL_PLAINTEXT",
-                    "sasl_mechanism": "PLAIN",
+                    "security_protocol": self.settings.kafka_security_protocol,
+                    "sasl_mechanism": self.settings.kafka_sasl_mechanism,
                     "sasl_plain_username": self.settings.kafka_username,
                     "sasl_plain_password": self.settings.kafka_password,
                 }

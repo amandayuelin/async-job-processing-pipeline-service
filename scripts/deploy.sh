@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PATH="$PROJECT_ROOT/.bin:$PATH"
+
 APP_NAME="${DO_APP_NAME:-async-job-pipeline}"
 APP_SPEC="${APP_SPEC:-infra/app.yaml}"
-DO_REGION="${DO_REGION:-nyc}"
-GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
+TF_DIR="${TF_DIR:-infra/terraform}"
+DO_APP_REGION="${DO_APP_REGION:-nyc}"
+DO_INFRA_REGION="${DO_INFRA_REGION:-nyc1}"
+GITHUB_REPO="${GITHUB_REPO:-}"
+GITHUB_BRANCH="${GITHUB_BRANCH:-}"
 API_INSTANCE_COUNT="${API_INSTANCE_COUNT:-1}"
 API_INSTANCE_SIZE="${API_INSTANCE_SIZE:-basic-xxs}"
 WORKER_INSTANCE_COUNT="${WORKER_INSTANCE_COUNT:-1}"
@@ -19,6 +25,7 @@ KAFKA_SUBMITTED_DEFAULT_TOPIC="${KAFKA_SUBMITTED_DEFAULT_TOPIC:-jobs.submitted.d
 KAFKA_SUBMITTED_LOW_TOPIC="${KAFKA_SUBMITTED_LOW_TOPIC:-jobs.submitted.low}"
 KAFKA_RETRY_TOPIC="${KAFKA_RETRY_TOPIC:-jobs.retry}"
 KAFKA_DEAD_LETTER_TOPIC="${KAFKA_DEAD_LETTER_TOPIC:-jobs.dead_lettered}"
+BOOTSTRAP_WAIT_SECONDS="${BOOTSTRAP_WAIT_SECONDS:-120}"
 
 require() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -29,25 +36,20 @@ require() {
 
 require doctl
 require python3
+require git
+require terraform
 
 if [[ -z "${DIGITALOCEAN_ACCESS_TOKEN:-}" ]]; then
   echo "DIGITALOCEAN_ACCESS_TOKEN is required" >&2
   exit 1
 fi
 
-if [[ -z "${DATABASE_URL:-}" ]]; then
-  echo "DATABASE_URL is required" >&2
-  exit 1
+if [[ -z "$GITHUB_REPO" ]]; then
+  GITHUB_REPO="$(git remote get-url origin | sed -E 's#^https://github.com/##; s#^git@github.com:##; s#\\.git$##')"
 fi
 
-if [[ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]]; then
-  echo "KAFKA_BOOTSTRAP_SERVERS is required" >&2
-  exit 1
-fi
-
-if [[ -z "${GITHUB_REPO:-}" ]]; then
-  echo "GITHUB_REPO is required, for example owner/repo" >&2
-  exit 1
+if [[ -z "$GITHUB_BRANCH" ]]; then
+  GITHUB_BRANCH="$(git branch --show-current)"
 fi
 
 if (( ${#APP_NAME} > 32 )); then
@@ -57,8 +59,25 @@ fi
 
 doctl auth init --access-token "$DIGITALOCEAN_ACCESS_TOKEN" >/dev/null
 
+echo "Provisioning durable infrastructure with Terraform"
+terraform -chdir="$TF_DIR" init -input=false
+terraform -chdir="$TF_DIR" apply -auto-approve -input=false \
+  -var "digitalocean_access_token=$DIGITALOCEAN_ACCESS_TOKEN" \
+  -var "app_name=$APP_NAME" \
+  -var "region=$DO_INFRA_REGION" \
+  -var "github_repo=$GITHUB_REPO" \
+  -var "github_branch=$GITHUB_BRANCH"
+
+DATABASE_URL="$(terraform -chdir="$TF_DIR" output -raw database_url)"
+KAFKA_BOOTSTRAP_SERVERS="$(terraform -chdir="$TF_DIR" output -raw kafka_bootstrap_servers)"
+
+if (( BOOTSTRAP_WAIT_SECONDS > 0 )); then
+  echo "Waiting ${BOOTSTRAP_WAIT_SECONDS}s for Droplet cloud-init to bootstrap PostgreSQL/Kafka"
+  sleep "$BOOTSTRAP_WAIT_SECONDS"
+fi
+
 RENDERED_SPEC="$(mktemp)"
-export APP_NAME DO_REGION GITHUB_REPO GITHUB_BRANCH DATABASE_URL KAFKA_BOOTSTRAP_SERVERS
+export APP_NAME DO_APP_REGION GITHUB_REPO GITHUB_BRANCH DATABASE_URL KAFKA_BOOTSTRAP_SERVERS
 export API_INSTANCE_COUNT API_INSTANCE_SIZE WORKER_INSTANCE_COUNT WORKER_INSTANCE_SIZE
 export MAX_PAGE_SIZE MAX_PAYLOAD_BYTES WORKER_POLL_INTERVAL_SECONDS WORKER_BATCH_SIZE STALE_LOCK_SECONDS
 export KAFKA_SUBMITTED_HIGH_TOPIC KAFKA_SUBMITTED_DEFAULT_TOPIC KAFKA_SUBMITTED_LOW_TOPIC KAFKA_RETRY_TOPIC KAFKA_DEAD_LETTER_TOPIC
@@ -70,7 +89,7 @@ from pathlib import Path
 source = Path(sys.argv[1]).read_text()
 replacements = {
     "__APP_NAME__": os.environ["APP_NAME"],
-    "__DO_REGION__": os.environ["DO_REGION"],
+    "__DO_REGION__": os.environ["DO_APP_REGION"],
     "__GITHUB_REPO__": os.environ["GITHUB_REPO"],
     "__GITHUB_BRANCH__": os.environ["GITHUB_BRANCH"],
     "__DATABASE_URL__": os.environ["DATABASE_URL"],
