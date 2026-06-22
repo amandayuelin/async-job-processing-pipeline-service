@@ -36,6 +36,41 @@ Close with verification and deployment:
 - `infra/terraform/` provisions the self-managed data Droplet.
 - `infra/app.yaml` and `scripts/deploy.sh` deploy API and worker components to DigitalOcean App Platform.
 
+## Test Coverage
+
+Fast API and contract tests in `tests/test_api.py`:
+
+- `GET /healthz` returns liveness and includes a request ID.
+- `GET /readyz` verifies the readiness response shape for database and Kafka.
+- `POST /jobs` creates a queued job, publishes once, and returns the job ID.
+- `GET /jobs/{id}` returns persisted job details, including recurring schedule fields.
+- Idempotent replay returns the same job ID and does not publish a duplicate Kafka message.
+- Validation failures and unsupported handlers return structured error responses.
+- `GET /jobs` supports listing and filtering by status.
+- `GET /queue/depth` reports queued work and queue depth by priority.
+- `POST /ops/drain` and `GET /ops/drain` toggle and read drain mode.
+- `POST /jobs/{id}/cancel` cancels pending work.
+- `GET /metrics` returns success counts, success rate, latency p50/p95, and worker utilization.
+
+Service and state-machine tests in `tests/test_service.py`:
+
+- Successful worker execution stores the result and marks the job `succeeded`.
+- Duplicate Kafka messages are skipped after a job is already terminal.
+- Transient handler failure marks the job `failed` and schedules retry.
+- Retry exhaustion marks the job `dead_lettered` and publishes a dead-letter event.
+- Timeout handling fails the attempt when a handler exceeds `timeout_seconds`.
+- Successful recurring jobs create the next future queued run.
+- Drain mode prevents workers from claiming new jobs.
+- Due queued or failed jobs can be republished to Kafka.
+- Kafka publish failure during submission is surfaced as `DependencyUnavailableError`.
+
+Integration and CI coverage:
+
+- `tests/test_integration.py` is an opt-in live PostgreSQL/Kafka scaffold gated by `RUN_INTEGRATION=1`.
+- `.github/workflows/ci.yml` runs the fast test suite with `pytest` on push and pull request.
+- `scripts/smoke.sh` validates a deployed environment quickly after deploy.
+- `scripts/demo.sh` exercises the deployed feature set end-to-end for review.
+
 ## Why These Choices
 
 PostgreSQL as source of truth:

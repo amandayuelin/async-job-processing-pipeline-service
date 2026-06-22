@@ -4,47 +4,13 @@ Production-candidate FastAPI service for asynchronous job submission, execution,
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    client[Client / Caller]
+High-level DigitalOcean deployment:
 
-    subgraph app[DigitalOcean App Platform]
-        api[FastAPI API]
-        worker[Worker Pool]
-        ops[Ops Endpoints]
-    end
+![High-level architecture](docs/high-level-architecture.png)
 
-    subgraph data[Self-managed Data Droplet]
-        db[(PostgreSQL<br/>Source of Truth)]
-        kafka[(Kafka<br/>Delivery Bus)]
-        dlq[(Dead-letter Topic)]
-    end
+Full job lifecycle, including retry and dead-letter flow:
 
-    client -->|POST /jobs| api
-    api -->|validate request| api
-    api -->|insert durable job row| db
-    api -->|publish job event| kafka
-    api -->|return job_id immediately| client
-
-    kafka -->|consume job message| worker
-    worker -->|claim job / lock row| db
-    worker -->|run pluggable handler| worker
-    worker -->|store result + succeeded| db
-
-    worker -->|transient failure| db
-    db -->|next_run_at reached| worker
-    worker -->|republish due retry| kafka
-
-    worker -->|retries exhausted| db
-    worker -->|publish DLQ event| dlq
-
-    client -->|GET /jobs/id| api
-    api -->|read job status/result| db
-    api -->|return lifecycle state| client
-
-    client -->|GET /queue/depth<br/>GET /metrics<br/>POST /ops/drain| ops
-    ops -->|read/update operational state| db
-```
+![Job lifecycle flow](docs/job-lifecycle-flow.png)
 
 - FastAPI API accepts jobs and returns a job ID immediately.
 - PostgreSQL stores authoritative job state, attempts, idempotency keys, results, drain mode, and dead-letter state.
