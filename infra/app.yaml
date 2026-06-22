@@ -1,0 +1,52 @@
+name: __APP_NAME__
+region: __DO_REGION__
+
+services:
+  - name: api
+    github:
+      repo: __GITHUB_REPO__
+      branch: __GITHUB_BRANCH__
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 8000
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    routes:
+      - path: /
+    health_check:
+      http_path: /healthz
+    envs:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        value: __DATABASE_URL__
+        type: SECRET
+      - key: KAFKA_BOOTSTRAP_SERVERS
+        value: __KAFKA_BOOTSTRAP_SERVERS__
+        type: SECRET
+      - key: LOG_LEVEL
+        value: INFO
+
+workers:
+  - name: worker
+    github:
+      repo: __GITHUB_REPO__
+      branch: __GITHUB_BRANCH__
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    run_command: python -m app.worker
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    envs:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        value: __DATABASE_URL__
+        type: SECRET
+      - key: KAFKA_BOOTSTRAP_SERVERS
+        value: __KAFKA_BOOTSTRAP_SERVERS__
+        type: SECRET
+      - key: WORKER_ID
+        value: worker-do
+      - key: LOG_LEVEL
+        value: INFO
